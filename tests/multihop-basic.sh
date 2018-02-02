@@ -14,7 +14,7 @@ fi
 
 fail_string()
 {
- if grep -q $1 "$2"; then
+ if grep  "$1" "$2"; then
    echo "FAILED: $1 in $2"
    exit 1
  fi
@@ -22,7 +22,7 @@ fail_string()
 
 pass_string()
 {
- if ! grep -q $1 "$2"; then
+ if ! grep "$1" "$2"; then
    echo "FAILED: $1 not in $2"
    exit 1
  fi
@@ -77,7 +77,7 @@ ip netns exec netlab-3 sysctl -w net.ipv4.ip_forward=1
 ip netns exec netlab-3 sysctl -w net.ipv6.conf.all.forwarding=1
 ip netns exec netlab-3 $BABELPATH -I babeld-n3.pid -d 1 -L babeld-n3.log -P 1 -w veth-3-2&
 
-sleep 15
+sleep 60
 fail_string "malformed" "babeld-n1.log"
 fail_string "malformed" "babeld-n2.log"
 fail_string "malformed" "babeld-n3.log"
