@@ -178,7 +178,7 @@ main(int argc, char **argv)
 
     while(1) {
         opt = getopt(argc, argv,
-                     "m:p:P:h:H:i:k:A:sruS:d:g:G:lwz:M:a:t:T:c:C:DL:I:V");
+                     "m:p:P:h:H:i:k:A:srS:d:g:G:lwz:M:a:t:T:c:C:DL:I:V");
         if(opt < 0)
             break;
 
@@ -233,9 +233,6 @@ main(int argc, char **argv)
             break;
         case 'r':
             random_id = 1;
-            break;
-        case 'u':
-            keep_unfeasible = 1;
             break;
         case 'S':
             state_file = optarg;
@@ -602,7 +599,6 @@ main(int argc, char **argv)
         send_hello(ifp);
         send_wildcard_retraction(ifp);
         send_self_update(ifp);
-        send_request(ifp, NULL, 0, NULL, 0);
         flushupdates(ifp);
         flushbuf(ifp);
     }
@@ -1138,11 +1134,12 @@ dump_tables(FILE *out)
     fprintf(out, "My id %s seqno %d\n", format_eui64(myid), myseqno);
 
     FOR_ALL_NEIGHBOURS(neigh) {
-        fprintf(out, "Neighbour %s dev %s reach %04x rxcost %d txcost %d "
-                "rtt %s rttcost %d chan %d%s.\n",
+        fprintf(out, "Neighbour %s dev %s reach %04x ureach %04x "
+                "rxcost %d txcost %d rtt %s rttcost %d chan %d%s.\n",
                 format_address(neigh->address),
                 neigh->ifp->name,
-                neigh->reach,
+                neigh->hello.reach,
+                neigh->uhello.reach,
                 neighbour_rxcost(neigh),
                 neigh->txcost,
                 format_thousands(neigh->rtt),
