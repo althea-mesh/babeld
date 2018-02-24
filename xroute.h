@@ -19,6 +19,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
+#include <stdint.h>
 
 struct xroute {
     unsigned char prefix[16];
@@ -26,7 +27,7 @@ struct xroute {
     unsigned char src_prefix[16];
     unsigned char src_plen;
     unsigned short metric;
-    unsigned short price;
+    uint32_t price;
     unsigned int ifindex;
     int proto;
 };

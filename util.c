@@ -197,24 +197,6 @@ parse_thousands(const char *string)
     return -1;
 }
 
-/* Very basic price parser, only does whole numbers */
-unsigned int
-parse_price(const char* string)
-{
-    unsigned int in;
-    int i;
-
-    in = 0;
-    i = 0;
-    while(string[i] == ' ' || string[i] == '\t')
-        i++;
-    while(string[i] >= '0' && string[i] <= '9') {
-        in = in * 10 + string[i] - '0';
-        i++;
-    }
-    return in;
-}
-
 void
 do_debugf(int level, const char *format, ...)
 {

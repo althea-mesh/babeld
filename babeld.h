@@ -80,6 +80,8 @@ THE SOFTWARE.
 #endif
 #endif
 
+#include <stdint.h>
+
 extern struct timeval now;
 extern int debug;
 extern time_t reboot_time;
@@ -106,8 +108,8 @@ extern int protocol_socket;
 extern int kernel_socket;
 extern int max_request_hopcount;
 
-extern unsigned int per_byte_cost;
-extern unsigned short price_multiplier;
+extern uint32_t per_byte_cost;
+extern uint16_t quality_multiplier;
 
 void schedule_neighbours_check(int msecs, int override);
 void schedule_interfaces_check(int msecs, int override);

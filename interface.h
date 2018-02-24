@@ -27,7 +27,6 @@ struct buffered_update {
     unsigned char plen;
     unsigned char src_plen;
     unsigned char pad[2];
-    unsigned int timestamp; /* for end to end timestamps */
 };
 
 #define IF_TYPE_DEFAULT 0

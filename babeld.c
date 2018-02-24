@@ -25,6 +25,7 @@ THE SOFTWARE.
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -99,11 +100,14 @@ static int accept_local_connections(void);
 static void init_signals(void);
 static void dump_tables(FILE *out);
 
-// The cost to retransmit using this node
-unsigned int per_byte_cost = 0;
-// Multiplier to indicate how much the user values funds vs quality
-// higher value means quality is valued more
-unsigned short price_multiplier = 1;
+// The cost to forward through us
+uint32_t per_byte_cost = 0;
+
+/**
+ * A multiplier to indicate how much the user values quality vs. price metrics;
+ * higher value means quality is valued more
+ */
+uint16_t quality_multiplier = 1;
 
 static int
 kernel_route_notify(struct kernel_route *route, void *closure)
@@ -178,7 +182,7 @@ main(int argc, char **argv)
 
     while(1) {
         opt = getopt(argc, argv,
-                     "m:p:P:h:H:i:k:A:sruS:d:g:G:lwz:M:a:t:T:c:C:DL:I:V");
+                     "m:p:P:h:H:i:k:A:srS:d:g:G:lwz:M:a:t:T:c:C:DL:I:V");
         if(opt < 0)
             break;
 
@@ -202,9 +206,6 @@ main(int argc, char **argv)
             protocol_port = parse_nat(optarg);
             if(protocol_port <= 0 || protocol_port > 0xFFFF)
                 goto usage;
-            break;
-        case 'P':
-            per_byte_cost = parse_price(optarg);
             break;
         case 'h':
             default_wireless_hello_interval = parse_thousands(optarg);
@@ -233,9 +234,6 @@ main(int argc, char **argv)
             break;
         case 'r':
             random_id = 1;
-            break;
-        case 'u':
-            keep_unfeasible = 1;
             break;
         case 'S':
             state_file = optarg;
@@ -290,12 +288,34 @@ main(int argc, char **argv)
             change_smoothing_half_life(l);
             break;
         }
-        case 'a': {
-            //Adjust price sensitivity
-            unsigned int a = parse_price(optarg);
-            if(a > 65535)
+        case 'P': {
+            char *endptr = optarg;
+            unsigned long a = strtoul(optarg, &endptr, 0);
+            errno = 0;
+
+            // Display help if strtoul() fails or the value won't fit
+            if(a > UINT32_MAX || endptr == optarg || errno) {
+                fprintf(stderr, "Couldn't parse the price: %s\n",
+                        optarg);
                 goto usage;
-            price_multiplier = a;
+            }
+
+            per_byte_cost = a;
+            break;
+        }
+        case 'a': {
+            char *endptr = optarg;
+            unsigned long a = strtoul(optarg, &endptr, 0);
+            errno = 0;
+
+            // Display help if strtoul() fails or the value won't fit
+            if(a > UINT16_MAX || endptr == optarg || errno) {
+                fprintf(stderr, "Couldn't parse the quality multiplier: %s\n",
+                        optarg);
+                goto usage;
+            }
+
+            quality_multiplier = a;
             break;
         }
         case 't':
@@ -602,7 +622,6 @@ main(int argc, char **argv)
         send_hello(ifp);
         send_wildcard_retraction(ifp);
         send_self_update(ifp);
-        send_request(ifp, NULL, 0, NULL, 0);
         flushupdates(ifp);
         flushbuf(ifp);
     }
@@ -887,6 +906,8 @@ main(int argc, char **argv)
             "               "
             "[-d level] [-D] [-L logfile] [-I pidfile]\n"
             "               "
+            "[-P price] [-a multiplier]\n"
+            "               "
             "interface...\n",
             BABELD_VERSION);
     exit(1);
@@ -1138,11 +1159,12 @@ dump_tables(FILE *out)
     fprintf(out, "My id %s seqno %d\n", format_eui64(myid), myseqno);
 
     FOR_ALL_NEIGHBOURS(neigh) {
-        fprintf(out, "Neighbour %s dev %s reach %04x rxcost %d txcost %d "
-                "rtt %s rttcost %d chan %d%s.\n",
+        fprintf(out, "Neighbour %s dev %s reach %04x ureach %04x "
+                "rxcost %d txcost %d rtt %s rttcost %d chan %d%s.\n",
                 format_address(neigh->address),
                 neigh->ifp->name,
-                neigh->reach,
+                neigh->hello.reach,
+                neigh->uhello.reach,
                 neighbour_rxcost(neigh),
                 neigh->txcost,
                 format_thousands(neigh->rtt),

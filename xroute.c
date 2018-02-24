@@ -116,7 +116,7 @@ add_xroute(unsigned char prefix[16], unsigned char plen,
     memcpy(xroutes[numxroutes].src_prefix, src_prefix, 16);
     xroutes[numxroutes].src_plen = src_plen;
     xroutes[numxroutes].metric = metric;
-    xroutes[numxroutes].price = per_byte_cost;
+    xroutes[numxroutes].price = 0; // We don't charge neighbors
     xroutes[numxroutes].ifindex = ifindex;
     xroutes[numxroutes].proto = proto;
     numxroutes++;
@@ -298,11 +298,6 @@ check_xroutes(int send_updates)
         }
 
     }
-
-    /* Update the price for all xroutes */
-    for(i = 0; i < numxroutes; i++){
-            xroutes[i].price = per_byte_cost;
-        }
 
     /* Check for any routes that need to be flushed */
 

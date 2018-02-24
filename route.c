@@ -47,7 +47,6 @@ int kernel_metric = 0, reflect_kernel_metric = 0;
 int allow_duplicates = -1;
 int diversity_kind = DIVERSITY_NONE;
 int diversity_factor = 256;     /* in units of 1/256 */
-int keep_unfeasible = 0;
 
 static int smoothing_half_life = 0;
 static int two_to_the_one_over_hl = 0; /* 2^(1/hl) * 0x10000 */
@@ -841,7 +840,7 @@ update_route(const unsigned char *id,
              unsigned short       seqno,
              unsigned short       refmetric,
              unsigned short       interval,
-             unsigned short       price,
+             uint32_t             price,
              struct neighbour    *neigh,
              const unsigned char *nexthop,
              const unsigned char *channels,
@@ -889,9 +888,10 @@ update_route(const unsigned char *id,
 
     if(route) {
         struct source *oldsrc;
-        unsigned short oldmetric;
+        unsigned short oldmetric, oldinstalled;
         int lost = 0;
 
+        oldinstalled = route->installed;
         oldsrc = route->src;
         oldmetric = route_metric(route);
 
@@ -915,7 +915,7 @@ update_route(const unsigned char *id,
         route->price = price + per_byte_cost;
 
         route->src = retain_source(src);
-        if((feasible || keep_unfeasible) && refmetric < INFINITY)
+        if(refmetric < INFINITY)
             route->time = now.tv_sec;
         route->seqno = seqno;
 
@@ -944,12 +944,14 @@ update_route(const unsigned char *id,
         route->hold_time = hold_time;
 
         route_changed(route, oldsrc, oldmetric, route->price);
+        if(!lost) {
+            lost = oldinstalled &&
+                find_installed_route(prefix, plen, src_prefix, src_plen) == NULL;
+        }
         if(lost)
             route_lost(oldsrc, oldmetric);
-
-        if(!feasible)
-            send_unfeasible_request(neigh, route->installed && route_old(route),
-                                    seqno, metric, src);
+        else if(!feasible)
+            send_unfeasible_request(neigh, route_old(route), seqno, metric, src);
         release_source(oldsrc);
     } else {
         struct babel_route *new_route;
@@ -959,8 +961,6 @@ update_route(const unsigned char *id,
             return NULL;
         if(!feasible) {
             send_unfeasible_request(neigh, 0, seqno, metric, src);
-            if(!keep_unfeasible)
-                return NULL;
         }
 
         route = calloc(1, sizeof(struct babel_route));
@@ -1066,8 +1066,8 @@ consider_route(struct babel_route *route)
         goto install;
 
 
-    installed_sum_metric = installed->price + (route_smoothed_metric(installed) * price_multiplier);
-    route_sum_metric = route->price + (route_smoothed_metric(route) * price_multiplier);
+    installed_sum_metric = installed->price + route_smoothed_metric(installed) * quality_multiplier;
+    route_sum_metric = route->price + route_smoothed_metric(route) * quality_multiplier;
     if(route_sum_metric < installed_sum_metric)
         goto install;
 
@@ -1164,7 +1164,7 @@ send_triggered_update(struct babel_route *route, struct source *oldsrc,
 void
 route_changed(struct babel_route *route,
               struct source *oldsrc, unsigned short oldmetric,
-              unsigned short oldprice)
+              uint32_t oldprice)
 {
     if(route->installed) {
         struct babel_route *better_route;
@@ -1204,7 +1204,7 @@ route_lost(struct source *src, unsigned oldmetric)
            If it was not, we could be dealing with oscillations around
            the value of INFINITY. */
         if(oldmetric <= INFINITY / 2)
-            send_request_resend(NULL, src->prefix, src->plen,
+            send_request_resend(src->prefix, src->plen,
                                 src->src_prefix, src->src_plen,
                                 src->metric >= INFINITY ?
                                 src->seqno : seqno_plus(src->seqno, 1),
