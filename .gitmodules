@@ -1,0 +1,3 @@
+[submodule "tests/babeld_b"]
+    path = tests/babeld_b
+    url = https://github.com/jech/babeld
