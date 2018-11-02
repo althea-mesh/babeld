@@ -16,3 +16,6 @@ tags
 tests/babeld_*
 *.pid
 *.log
+
+# Profiling artifacts
+gmon*

@@ -20,8 +20,13 @@ OBJS = babeld.o net.o kernel.o util.o interface.o source.o neighbour.o \
 babeld: $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o babeld $(OBJS) $(LDLIBS)
 
-debug:
-	$(MAKE) "CFLAGS=$(CDEBUGFLAGS)" babeld
+debug: CFLAGS = $(CDEBUGFLAGS)
+debug: babeld
+
+# gprof profiling
+profile: CDEBUGFLAGS += -pg -fprofile-arcs
+profile: CC := gcc
+profile: debug
 
 babeld.o: babeld.c version.h
 
