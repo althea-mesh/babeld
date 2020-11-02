@@ -24,6 +24,8 @@ THE SOFTWARE.
 #include <string.h>
 #include <stdio.h>
 #include <sys/time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <time.h>
 #include <assert.h>
 
@@ -55,8 +57,6 @@ void
 flush_neighbour(struct neighbour *neigh)
 {
     flush_neighbour_routes(neigh);
-    if(unicast_neighbour == neigh)
-        flush_unicast(1);
     flush_resends(neigh);
 
     if(neighs == neigh) {
@@ -68,6 +68,7 @@ flush_neighbour(struct neighbour *neigh)
         previous->next = neigh->next;
     }
     local_notify_neighbour(neigh, LOCAL_FLUSH);
+    free(neigh->buf.buf);
     free(neigh);
 }
 
@@ -76,6 +77,7 @@ find_neighbour(const unsigned char *address, struct interface *ifp)
 {
     struct neighbour *neigh;
     const struct timeval zero = {0, 0};
+    unsigned char *buf;
 
     neigh = find_neighbour_nocreate(address, ifp);
     if(neigh)
@@ -84,8 +86,15 @@ find_neighbour(const unsigned char *address, struct interface *ifp)
     debugf("Creating neighbour %s on %s.\n",
            format_address(address), ifp->name);
 
+    buf = malloc(ifp->buf.size);
+    if(buf == NULL) {
+        perror("malloc(neighbour->buf)");
+        return NULL;
+    }
+
     neigh = calloc(1, sizeof(struct neighbour));
     if(neigh == NULL) {
+        free(buf);
         perror("malloc(neighbour)");
         return NULL;
     }
@@ -98,10 +107,17 @@ find_neighbour(const unsigned char *address, struct interface *ifp)
     neigh->hello_rtt_receive_time = zero;
     neigh->rtt_time = zero;
     neigh->ifp = ifp;
+    neigh->buf.buf = buf;
+    neigh->buf.size = ifp->buf.size;
+    neigh->buf.hello = -1;
+    neigh->buf.flush_interval = ifp->buf.flush_interval;
+    neigh->buf.sin6.sin6_family = AF_INET6;
+    memcpy(&neigh->buf.sin6.sin6_addr, address, 16);
+    neigh->buf.sin6.sin6_port = htons(protocol_port);
+    neigh->buf.sin6.sin6_scope_id = ifp->ifindex;
     neigh->next = neighs;
     neighs = neigh;
     local_notify_neighbour(neigh, LOCAL_ADD);
-    send_hello(ifp);
     return neigh;
 }
 
@@ -115,12 +131,13 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
     int rc = 0;
 
     if(hello < 0) {
-        if(hist->interval <= 0)
-            return rc;
-        missed_hellos =
-            ((int)timeval_minus_msec(&now, &hist->time) -
-             hist->interval * 7) /
-            (hist->interval * 10);
+        if(hist->interval > 0)
+            missed_hellos =
+                ((int)timeval_minus_msec(&now, &hist->time) -
+                 hist->interval * 7) /
+                (hist->interval * 10);
+        else
+            missed_hellos = 16; /* infinity */
         if(missed_hellos <= 0)
             return rc;
         timeval_add_msec(&hist->time, &hist->time,
@@ -135,6 +152,11 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
                 missed_hellos = 0;
                 rc = 1;
             } else if(missed_hellos < 0) {
+                /* Late hello. Probably due to the link layer buffering
+                   packets during a link outage or a cpu overload. */
+                   fprintf(stderr,
+                        "Late hello: bufferbloated neighbor %s\n",
+                         format_address(neigh->address));
                 hist->reach <<= -missed_hellos;
                 missed_hellos = 0;
                 rc = 1;
@@ -163,29 +185,6 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
             rc = 1;
     }
 
-    if(unicast)
-        return rc;
-
-    /* Make sure to give neighbours some feedback early after association */
-    if((hist->reach & 0xBF00) == 0x8000) {
-        /* A new neighbour */
-        send_hello(neigh->ifp);
-    } else {
-        /* Don't send hellos, in order to avoid a positive feedback loop. */
-        int a = (hist->reach & 0xC000);
-        int b = (hist->reach & 0x3000);
-        if((a == 0xC000 && b == 0) || (a == 0 && b == 0x3000)) {
-            /* Reachability is either 1100 or 0011 */
-            send_self_update(neigh->ifp);
-        }
-    }
-
-    if((hist->reach & 0xFC00) == 0xC000) {
-        /* This is a newish neighbour, let's request a full route dump.
-           We ought to avoid this when the network is dense */
-        send_unicast_request(neigh, NULL, 0, NULL, 0);
-        send_ihu(neigh, NULL);
-    }
     return rc;
 }
 

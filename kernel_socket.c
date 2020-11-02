@@ -44,9 +44,11 @@ THE SOFTWARE.
 #include <net/route.h>
 
 #include "babeld.h"
+#include "interface.h"
 #include "neighbour.h"
 #include "kernel.h"
 #include "util.h"
+
 
 
 static int get_sdl(struct sockaddr_dl *sdl, char *ifname);
@@ -406,6 +408,7 @@ int
 kernel_route(int operation, int table,
              const unsigned char *dest, unsigned short plen,
              const unsigned char *src, unsigned short src_plen,
+             const unsigned char *pref_src,
              const unsigned char *gate, int ifindex, unsigned int metric,
              const unsigned char *newgate, int newifindex,
              unsigned int newmetric, int newtable)
@@ -422,8 +425,9 @@ kernel_route(int operation, int table,
         {{{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x01 }}};
 
-    /* Source-specific routes are not implemented yet for BSD. */
-    if(!is_default(src, src_plen)) {
+    /* Source-specific routes & preferred source IPs
+     * are not implemented yet for BSD. */
+    if((!is_default(src, src_plen)) || pref_src) {
         errno = ENOSYS;
         return -1;
     }
@@ -452,11 +456,11 @@ kernel_route(int operation, int table,
 
         /* Avoid atomic route changes that is buggy on OS X. */
         kernel_route(ROUTE_FLUSH, table, dest, plen,
-                     src, src_plen,
+                     src, src_plen, NULL,
                      gate, ifindex, metric,
                      NULL, 0, 0, 0);
         return kernel_route(ROUTE_ADD, table, dest, plen,
-                            src, src_plen,
+                            src, src_plen, NULL,
                             newgate, newifindex, newmetric,
                             NULL, 0, 0, 0);
 
@@ -586,7 +590,7 @@ print_kernel_route(int add, struct kernel_route *route)
         memcpy(ifname,"unk",4);
 
     fprintf(stderr,
-            "%s kernel route: dest: %s gw: %s metric: %d if: %s(%d) \n",
+            "%s kernel route: dest: %s gw: %s metric: %d if: %s(%u) \n",
             add == RTM_ADD ? "Add" :
             add == RTM_DELETE ? "Delete" : "Change",
             format_prefix(route->prefix, route->plen),

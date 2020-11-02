@@ -109,22 +109,22 @@ EOF
 ip netns exec netlab-1 sysctl -w net.ipv4.ip_forward=1
 ip netns exec netlab-1 sysctl -w net.ipv6.conf.all.forwarding=1
 ip netns exec netlab-1 $BABELPATH -I babeld-n1.pid -d 1 -L babeld-n1.log -F 5 \
-  -w veth-1-4 -w veth-1-2 -h 1 -H 1 -C "default update-interval 1" -q 0 &
+  -w veth-1-4 -w veth-1-2 -h 1 -H 1 -C "default update-interval 1" -C 'default max-rtt-penalty 100' -C 'default enable-timestamps true' -q 0 &
 
 ip netns exec netlab-2 sysctl -w net.ipv4.ip_forward=1
 ip netns exec netlab-2 sysctl -w net.ipv6.conf.all.forwarding=1
 ip netns exec netlab-2 $BABELPATH -I babeld-n2.pid -d 1 -L babeld-n2.log -F 10 \
-  -w veth-2-1 -w veth-2-3 -h 1 -H 1 -C "default update-interval 1" -q 0 &
+  -w veth-2-1 -w veth-2-3 -h 1 -H 1 -C "default update-interval 1" -C 'default max-rtt-penalty 100' -C 'default enable-timestamps true' -q 0 &
 
 ip netns exec netlab-3 sysctl -w net.ipv4.ip_forward=1
 ip netns exec netlab-3 sysctl -w net.ipv6.conf.all.forwarding=1
 ip netns exec netlab-3 $BABELPATH -I babeld-n3.pid -d 1 -L babeld-n3.log -F 1 \
-  -w veth-3-2 -w veth-3-4 -h 1 -H 1 -C "default update-interval 1" -q 0 &
+  -w veth-3-2 -w veth-3-4 -h 1 -H 1 -C "default update-interval 1" -C 'default max-rtt-penalty 100' -C 'default enable-timestamps true' -q 0 &
 
 ip netns exec netlab-4 sysctl -w net.ipv4.ip_forward=1
 ip netns exec netlab-4 sysctl -w net.ipv6.conf.all.forwarding=1
 ip netns exec netlab-4 $BABELPATH -I babeld-n4.pid -d 1 -L babeld-n4.log -F 7 \
-  -w veth-4-3 -w veth-4-1 -h 1 -H 1 -C "default update-interval 1" -q 0&
+  -w veth-4-3 -w veth-4-1 -h 1 -H 1 -C "default update-interval 1" -C 'default max-rtt-penalty 100' -C 'default enable-timestamps true' -q 0&
 
 sleep $CONVERGENCE_DELAY_SEC
 
@@ -146,43 +146,43 @@ fi
 # ============================ PRICE TESTS =====================================
 
 # netlab-1
-pass_string "1.0.0.2/32 from.*price 0 fee 5.*via veth-1-2.*nexthop 1.0.0.2" "babeld-n1.log"
+pass_string "1.0.0.2/32 metric.*price 0 fee 5.*via veth-1-2.*nexthop 1.0.0.2" "babeld-n1.log"
 pass_reachable "netlab-1" "1.0.0.2"
 
-pass_string "1.0.0.3/32 from.*price 7 fee 5.*via veth-1-4.*nexthop 1.0.0.4" "babeld-n1.log"
+pass_string "1.0.0.3/32 metric.*price 7 fee 5.*via veth-1-4.*nexthop 1.0.0.4" "babeld-n1.log"
 pass_reachable "netlab-1" "1.0.0.3"
 
-pass_string "1.0.0.4/32 from.*price 0 fee 5.*via veth-1-4.*nexthop 1.0.0.4" "babeld-n1.log"
+pass_string "1.0.0.4/32 metric.*price 0 fee 5.*via veth-1-4.*nexthop 1.0.0.4" "babeld-n1.log"
 pass_reachable "netlab-1" "1.0.0.4"
 
 # netlab-2
-pass_string "1.0.0.1/32 from.*price 0 fee 10.*via veth-2-1.*nexthop 1.0.0.1" "babeld-n2.log"
+pass_string "1.0.0.1/32 metric.*price 0 fee 10.*via veth-2-1.*nexthop 1.0.0.1" "babeld-n2.log"
 pass_reachable "netlab-2" "1.0.0.1"
 
-pass_string "1.0.0.3/32 from.*price 0 fee 10.*via veth-2-3.*nexthop 1.0.0.3" "babeld-n2.log"
+pass_string "1.0.0.3/32 metric.*price 0 fee 10.*via veth-2-3.*nexthop 1.0.0.3" "babeld-n2.log"
 pass_reachable "netlab-2" "1.0.0.3"
 
-pass_string "1.0.0.4/32 from.*price 1 fee 10.*via veth-2-3.*nexthop 1.0.0.3" "babeld-n2.log"
+pass_string "1.0.0.4/32 metric.*price 1 fee 10.*via veth-2-3.*nexthop 1.0.0.3" "babeld-n2.log"
 pass_reachable "netlab-2" "1.0.0.4"
 
 # netlab-3
-pass_string "1.0.0.1/32 from.*price 7 fee 1.*via veth-3-4.*nexthop 1.0.0.4" "babeld-n3.log"
+pass_string "1.0.0.1/32 metric.*price 7 fee 1.*via veth-3-4.*nexthop 1.0.0.4" "babeld-n3.log"
 pass_reachable "netlab-3" "1.0.0.1"
 
-pass_string "1.0.0.2/32 from.*price 0 fee 1.*via veth-3-2.*nexthop 1.0.0.2" "babeld-n3.log"
+pass_string "1.0.0.2/32 metric.*price 0 fee 1.*via veth-3-2.*nexthop 1.0.0.2" "babeld-n3.log"
 pass_reachable "netlab-3" "1.0.0.2"
 
-pass_string "1.0.0.4/32 from.*price 0 fee 1.*via veth-3-4.*nexthop 1.0.0.4" "babeld-n3.log"
+pass_string "1.0.0.4/32 metric.*price 0 fee 1.*via veth-3-4.*nexthop 1.0.0.4" "babeld-n3.log"
 pass_reachable "netlab-3" "1.0.0.4"
 
 # netlab-4
-pass_string "1.0.0.1/32 from.*price 0 fee 7.*via veth-4-1.*nexthop 1.0.0.1" "babeld-n4.log"
+pass_string "1.0.0.1/32 metric.*price 0 fee 7.*via veth-4-1.*nexthop 1.0.0.1" "babeld-n4.log"
 pass_reachable "netlab-4" "1.0.0.1"
 
-pass_string "1.0.0.2/32 from.*price 1 fee 7.*via veth-4-3.*nexthop 1.0.0.3" "babeld-n4.log"
+pass_string "1.0.0.2/32 metric.*price 1 fee 7.*via veth-4-3.*nexthop 1.0.0.3" "babeld-n4.log"
 pass_reachable "netlab-4" "1.0.0.2"
 
-pass_string "1.0.0.3/32 from.*price 0 fee 7.*via veth-4-3.*nexthop 1.0.0.3" "babeld-n4.log"
+pass_string "1.0.0.3/32 metric.*price 0 fee 7.*via veth-4-3.*nexthop 1.0.0.3" "babeld-n4.log"
 pass_reachable "netlab-4" "1.0.0.3"
 
 if [[ -v DEBUG ]]; then

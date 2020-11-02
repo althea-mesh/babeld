@@ -58,7 +58,7 @@ THE SOFTWARE.
 #include "configuration.h"
 
 #ifndef MAX_INTERFACES
-#define MAX_INTERFACES 20
+#define MAX_INTERFACES 1024
 #endif
 
 #define GET_PLEN(p, v4) (v4) ? (p) + 96 : (p)
@@ -95,8 +95,9 @@ struct old_if {
     int rp_filter;
 };
 
-struct old_if old_if[MAX_INTERFACES];
+struct old_if *old_if = NULL;
 int num_old_if = 0;
+int max_old_if = 0;
 
 static int dgram_socket = -1;
 
@@ -390,6 +391,9 @@ netlink_read(struct netlink *nl, struct netlink *nl_ignore, int answer,
                     errno = -err->error;
                     return -1;
                 }
+            } else if(nh->nlmsg_type == RTM_NEWLINK || nh->nlmsg_type == RTM_DELLINK ) {
+                kdebugf("detected an interface change via netlink - triggering babeld interface check\n");
+                check_interfaces();
             } else if(skip) {
                 kdebugf("(skip)");
             } if(filter) {
@@ -443,7 +447,7 @@ netlink_talk(struct nlmsghdr *nh)
     nh->nlmsg_seq = ++nl_command.seqno;
 
     kdebugf("Sending seqno %d from address %p (talk)\n",
-            nl_command.seqno, &nl_command.seqno);
+            nl_command.seqno, (void*)&nl_command.seqno);
 
     rc = sendmsg(nl_command.sock, &msg, 0);
     if(rc < 0 && (errno == EAGAIN || errno == EINTR)) {
@@ -511,7 +515,7 @@ netlink_send_dump(int type, void *data, int len) {
     buf.nh.nlmsg_len = NLMSG_LENGTH(len);
 
     kdebugf("Sending seqno %d from address %p (dump)\n",
-            nl_command.seqno, &nl_command.seqno);
+            nl_command.seqno, (void*)&nl_command.seqno);
 
     rc = sendmsg(nl_command.sock, &msg, 0);
     if(rc < buf.nh.nlmsg_len) {
@@ -646,6 +650,18 @@ get_old_if(const char *ifname)
             return i;
     if(num_old_if >= MAX_INTERFACES)
         return -1;
+    if(num_old_if >= max_old_if) {
+            int n = max_old_if == 0 ? 4 : 2 * max_old_if;
+            struct old_if *new =
+                realloc(old_if, n * sizeof(struct old_if));
+            if(new != NULL) {
+                old_if = new;
+                max_old_if = n;
+            }
+    }
+    if(num_old_if >= max_old_if)
+        return -1;
+
     old_if[num_old_if].ifname = strdup(ifname);
     if(old_if[num_old_if].ifname == NULL)
         return -1;
@@ -674,14 +690,18 @@ kernel_setup_interface(int setup, const char *ifname, int ifindex)
             fprintf(stderr,
                     "Warning: cannot save old configuration for %s.\n",
                     ifname);
-        rc = write_proc(buf, 0);
-        if(rc < 0)
-            return -1;
+	if(old_if[i].rp_filter) {
+	    rc = write_proc(buf, 0);
+	    if(rc < 0)
+		return -1;
+	}
     } else {
-        if(i >= 0 && old_if[i].rp_filter >= 0)
+        if(i >= 0 && old_if[i].rp_filter > 0)
             rc = write_proc(buf, old_if[i].rp_filter);
-        else
+        else if(i < 0)
             rc = -1;
+        else
+            rc = 1;
 
         if(rc < 0)
             fprintf(stderr,
@@ -924,6 +944,7 @@ int
 kernel_route(int operation, int table,
              const unsigned char *dest, unsigned short plen,
              const unsigned char *src, unsigned short src_plen,
+             const unsigned char *pref_src,
              const unsigned char *gate, int ifindex, unsigned int metric,
              const unsigned char *newgate, int newifindex,
              unsigned int newmetric, int newtable)
@@ -977,11 +998,11 @@ kernel_route(int operation, int table,
            stick with the naive approach, and hope that the window is
            small enough to be negligible. */
         kernel_route(ROUTE_FLUSH, table, dest, plen,
-                     src, src_plen,
+                     src, src_plen, pref_src,
                      gate, ifindex, metric,
                      NULL, 0, 0, 0);
         rc = kernel_route(ROUTE_ADD, newtable, dest, plen,
-                          src, src_plen,
+                          src, src_plen, pref_src,
                           newgate, newifindex, newmetric,
                           NULL, 0, 0, 0);
         if(rc < 0) {
@@ -1064,17 +1085,24 @@ kernel_route(int operation, int table,
         rta->rta_type = RTA_OIF;
         *(int*)RTA_DATA(rta) = ifindex;
 
-        if(ipv4) {
-            rta = RTA_NEXT(rta, len);
-            rta->rta_len = RTA_LENGTH(sizeof(struct in_addr));
-            rta->rta_type = RTA_GATEWAY;
-            memcpy(RTA_DATA(rta), gate + 12, sizeof(struct in_addr));
-        } else {
-            rta = RTA_NEXT(rta, len);
-            rta->rta_len = RTA_LENGTH(sizeof(struct in6_addr));
-            rta->rta_type = RTA_GATEWAY;
-            memcpy(RTA_DATA(rta), gate, sizeof(struct in6_addr));
-        }
+#define ADD_IPARG(type, addr) \
+        do if(ipv4) { \
+            rta = RTA_NEXT(rta, len); \
+            rta->rta_len = RTA_LENGTH(sizeof(struct in_addr)); \
+            rta->rta_type = type; \
+            memcpy(RTA_DATA(rta), addr + 12, sizeof(struct in_addr)); \
+        } else { \
+            rta = RTA_NEXT(rta, len); \
+            rta->rta_len = RTA_LENGTH(sizeof(struct in6_addr)); \
+            rta->rta_type = type; \
+            memcpy(RTA_DATA(rta), addr, sizeof(struct in6_addr)); \
+        } while (0)
+
+        ADD_IPARG(RTA_GATEWAY, gate);
+        if(pref_src)
+            ADD_IPARG(RTA_PREFSRC, pref_src);
+
+#undef ADD_IPARG
     } else {
         *(int*)RTA_DATA(rta) = -1;
     }
@@ -1099,6 +1127,7 @@ parse_kernel_route_rta(struct rtmsg *rtm, int len, struct kernel_route *route)
         v4tov6(route->prefix, zeroes);
         v4tov6(route->src_prefix, zeroes);
         route->plen = 96;
+        route->src_plen = 96;
     }
     route->proto = rtm->rtm_protocol;
 
@@ -1313,13 +1342,16 @@ parse_addr_rta(struct ifaddrmsg *addr, int len, struct in6_addr *res)
     struct rtattr *rta;
     len -= NLMSG_ALIGN(sizeof(*addr));
     rta = IFA_RTA(addr);
-    int has_local = 0; /* A _LOCAL TLV may be bound with a _ADDRESS' which
-        represents the peer's address.  In this case, ignore _ADDRESS. */
+    int is_local = 0;
 
     while(RTA_OK(rta, len)) {
         switch(rta->rta_type) {
         case IFA_LOCAL:
-            has_local = 1;
+            /* On some point-to-point technologies, there's both _LOCAL
+               and _ADDRESS, and _ADDRESS is apparently the peer address
+               while _LOCAL is the one we want. */
+            is_local = 1;
+            /* fallthrough */
         case IFA_ADDRESS:
             switch(addr->ifa_family) {
             case AF_INET:
@@ -1336,7 +1368,7 @@ parse_addr_rta(struct ifaddrmsg *addr, int len, struct in6_addr *res)
                 return -1;
                 break;
             }
-            if(has_local)
+            if(is_local)
                 return 0;
             break;
         default:
@@ -1587,7 +1619,7 @@ add_rule(int prio, const unsigned char *src_prefix, int src_plen, int table)
 
     message_header->nlmsg_len += current_attribute->rta_len;
     current_attribute = (void*)
-        ((char*)current_attribute) + current_attribute->rta_len;
+        ((char*)current_attribute + current_attribute->rta_len);
 
     /* src */
     current_attribute->rta_len = RTA_LENGTH(addr_size);
@@ -1596,7 +1628,7 @@ add_rule(int prio, const unsigned char *src_prefix, int src_plen, int table)
 
     message_header->nlmsg_len += current_attribute->rta_len;
     current_attribute = (void*)
-        ((char*)current_attribute) + current_attribute->rta_len;
+        ((char*)current_attribute + current_attribute->rta_len);
 
     /* send message */
     if(message_header->nlmsg_len > 64) {
@@ -1649,7 +1681,7 @@ flush_rule(int prio, int family)
 
     message_header->nlmsg_len += current_attribute->rta_len;
     current_attribute = (void*)
-        ((char*)current_attribute) + current_attribute->rta_len;
+        ((char*)current_attribute + current_attribute->rta_len);
 
     /* send message */
     if(message_header->nlmsg_len > 64) {

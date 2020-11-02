@@ -25,6 +25,8 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <errno.h>
 #include <assert.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <sys/time.h>
 
 #include "babeld.h"
@@ -34,8 +36,9 @@ THE SOFTWARE.
 #include "route.h"
 #include "source.h"
 #include "neighbour.h"
-#include "rule.h"
 #include "disambiguation.h"
+#include "configuration.h"
+#include "rule.h"
 
 struct zone {
     const unsigned char *dst_prefix;
@@ -212,55 +215,64 @@ is_installed(struct zone *zone)
 }
 
 static int
+change_route(int operation, const struct zone *zone,
+             const struct babel_route *route, int metric,
+             const unsigned char *new_next_hop,
+             int new_ifindex, int new_metric)
+{
+    struct filter_result filter_result;
+    unsigned char *pref_src = NULL;
+    unsigned int ifindex = route->neigh->ifp->ifindex;
+
+    int m = install_filter(zone->dst_prefix, zone->dst_plen,
+                           zone->src_prefix, zone->src_plen,
+                           ifindex, &filter_result);
+    if (m < BABEL_INFINITY)
+        pref_src = filter_result.pref_src;
+
+    int table = filter_result.table ? filter_result.table :
+        find_table(zone->dst_prefix, zone->dst_plen,
+                   zone->src_prefix, zone->src_plen);
+
+    return kernel_route(operation, table, zone->dst_prefix, zone->dst_plen,
+                        zone->src_prefix, zone->src_plen, pref_src,
+                        route->nexthop, ifindex,
+                        metric, new_next_hop, new_ifindex, new_metric,
+                        operation == ROUTE_MODIFY ? table : 0);
+}
+
+static int
 add_route(const struct zone *zone, const struct babel_route *route)
 {
-    int table = find_table(zone->dst_prefix, zone->dst_plen,
-                           zone->src_prefix, zone->src_plen);
-    return kernel_route(ROUTE_ADD, table, zone->dst_prefix, zone->dst_plen,
-                        zone->src_prefix, zone->src_plen,
-                        route->nexthop,
-                        route->neigh->ifp->ifindex,
-                        metric_to_kernel(route_metric(route)), NULL, 0, 0, 0);
+    return change_route(ROUTE_ADD, zone, route,
+                        metric_to_kernel(route_metric(route)), NULL, 0, 0);
 }
 
 static int
 del_route(const struct zone *zone, const struct babel_route *route)
 {
-    int table = find_table(zone->dst_prefix, zone->dst_plen,
-                           zone->src_prefix, zone->src_plen);
-    return kernel_route(ROUTE_FLUSH, table, zone->dst_prefix, zone->dst_plen,
-                        zone->src_prefix, zone->src_plen,
-                        route->nexthop,
-                        route->neigh->ifp->ifindex,
-                        metric_to_kernel(route_metric(route)), NULL, 0, 0, 0);
+    return change_route(ROUTE_FLUSH, zone, route,
+                        metric_to_kernel(route_metric(route)), NULL, 0, 0);
 }
 
 static int
 chg_route(const struct zone *zone, const struct babel_route *old,
           const struct babel_route *new)
 {
-    int table = find_table(zone->dst_prefix, zone->dst_plen,
-                           zone->src_prefix, zone->src_plen);
-    return kernel_route(ROUTE_MODIFY, table, zone->dst_prefix, zone->dst_plen,
-                        zone->src_prefix, zone->src_plen,
-                        old->nexthop, old->neigh->ifp->ifindex,
+    return change_route(ROUTE_MODIFY, zone, old,
                         metric_to_kernel(route_metric(old)),
                         new->nexthop, new->neigh->ifp->ifindex,
-                        metric_to_kernel(route_metric(new)), table);
+                        metric_to_kernel(route_metric(new)));
 }
 
 static int
 chg_route_metric(const struct zone *zone, const struct babel_route *route,
                  int old_metric, int new_metric)
 {
-    int table = find_table(zone->dst_prefix, zone->dst_plen,
-                           zone->src_prefix, zone->src_plen);
-    return kernel_route(ROUTE_MODIFY, table, zone->dst_prefix, zone->dst_plen,
-                        zone->src_prefix, zone->src_plen,
-                        route->nexthop, route->neigh->ifp->ifindex,
+    return change_route(ROUTE_MODIFY, zone, route,
                         old_metric,
                         route->nexthop, route->neigh->ifp->ifindex,
-                        new_metric, table);
+                        new_metric);
 }
 
 int

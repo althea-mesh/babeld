@@ -12,7 +12,7 @@ cd $(dirname $0)
 LABPATH=${LABPATH:=./network-lab.sh}
 CONVERGENCE_DELAY_SEC=${CONVERGENCE_DELAY_SEC:=5}
 
-# Where do we clone from?
+# Where do we clone metric.
 BABELD_A_REMOTE=${BABELD_A_REMOTE:=..}
 BABELD_B_REMOTE=${BABELD_B_REMOTE:=https://github.com/althea-mesh/babeld.git}
 
@@ -70,7 +70,7 @@ pass_reachable()
 
   if [ $? -ne 0 ]
   then
-    echo "Couldn't reach $target from namespace $ns"
+    echo "Couldn't reach $target metric.namespace $ns"
     exit 1
   fi
 }
@@ -179,43 +179,43 @@ fail_string "unknown version" "babeld-n4.log"
 # ============================ REACHABILITY TESTS =====================================
 
 # netlab-1
-pass_string "1.0.0.2/32 from.*" "babeld-n1.log"
+pass_string "1.0.0.2/32 metric.*" "babeld-n1.log"
 pass_reachable "netlab-1" "1.0.0.2"
 
-pass_string "1.0.0.3/32 from.*" "babeld-n1.log"
+pass_string "1.0.0.3/32 metric.*" "babeld-n1.log"
 pass_reachable "netlab-1" "1.0.0.3"
 
-pass_string "1.0.0.4/32 from.*" "babeld-n1.log"
+pass_string "1.0.0.4/32 metric.*" "babeld-n1.log"
 pass_reachable "netlab-1" "1.0.0.4"
 
 # netlab-2
-pass_string "1.0.0.1/32 from.*" "babeld-n2.log"
+pass_string "1.0.0.1/32 metric.*" "babeld-n2.log"
 pass_reachable "netlab-2" "1.0.0.1"
 
-pass_string "1.0.0.3/32 from.*" "babeld-n2.log"
+pass_string "1.0.0.3/32 metric.*" "babeld-n2.log"
 pass_reachable "netlab-2" "1.0.0.3"
 
-pass_string "1.0.0.4/32 from.*" "babeld-n2.log"
+pass_string "1.0.0.4/32 metric.*" "babeld-n2.log"
 pass_reachable "netlab-2" "1.0.0.4"
 
 # netlab-3
-pass_string "1.0.0.1/32 from.*" "babeld-n3.log"
+pass_string "1.0.0.1/32 metric.*" "babeld-n3.log"
 pass_reachable "netlab-3" "1.0.0.1"
 
-pass_string "1.0.0.2/32 from.*" "babeld-n3.log"
+pass_string "1.0.0.2/32 metric.*" "babeld-n3.log"
 pass_reachable "netlab-3" "1.0.0.2"
 
-pass_string "1.0.0.4/32 from.*" "babeld-n3.log"
+pass_string "1.0.0.4/32 metric.*" "babeld-n3.log"
 pass_reachable "netlab-3" "1.0.0.4"
 
 # netlab-4
-pass_string "1.0.0.1/32 from.*" "babeld-n4.log"
+pass_string "1.0.0.1/32 metric.*" "babeld-n4.log"
 pass_reachable "netlab-4" "1.0.0.1"
 
-pass_string "1.0.0.2/32 from.*" "babeld-n4.log"
+pass_string "1.0.0.2/32 metric.*" "babeld-n4.log"
 pass_reachable "netlab-4" "1.0.0.2"
 
-pass_string "1.0.0.3/32 from.*" "babeld-n4.log"
+pass_string "1.0.0.3/32 metric.*" "babeld-n4.log"
 pass_reachable "netlab-4" "1.0.0.3"
 
 cleanup

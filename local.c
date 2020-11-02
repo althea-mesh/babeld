@@ -106,8 +106,8 @@ local_notify_interface_1(struct local_socket *s,
         rc = snprintf(buf, 512,
                       "%s interface %s up true%s%s%s%s\n",
                       local_kind(kind), ifp->name,
-                      ifp->ll ? " ipv6 " : "",
-                      ifp->ll ? format_address(*ifp->ll) : "",
+                      ifp->numll > 0 ? " ipv6 " : "",
+                      ifp->numll > 0 ? format_address(ifp->ll[0]) : "",
                       v4[0] ? " ipv4 " : "", v4);
     else
         rc = snprintf(buf, 512, "%s interface %s up false\n",
@@ -145,7 +145,7 @@ local_notify_neighbour_1(struct local_socket *s,
 
     rttbuf[0] = '\0';
     if(valid_rtt(neigh)) {
-        rc = snprintf(rttbuf, 64, " rtt %s rttcost %d",
+        rc = snprintf(rttbuf, 64, " rtt %s rttcost %u",
                       format_thousands(neigh->rtt), neighbour_rttcost(neigh));
         if(rc < 0 || rc >= 64)
             rttbuf[0] = '\0';
@@ -154,7 +154,7 @@ local_notify_neighbour_1(struct local_socket *s,
     rc = snprintf(buf, 512,
                   "%s neighbour %lx address %s "
                   "if %s reach %04x ureach %04x "
-                  "rxcost %d txcost %d%s cost %d\n",
+                  "rxcost %u txcost %u%s cost %u\n",
                   local_kind(kind),
                   /* Neighbours never move around in memory , so we can use the
                      address as a unique identifier. */
@@ -364,7 +364,7 @@ local_notify_all_1(struct local_socket *s)
 int
 local_read(struct local_socket *s)
 {
-    int rc;
+    int rc, n;
     char *eol;
     char reply[100] = "ok\n";
     const char *message = NULL;
@@ -384,47 +384,50 @@ local_read(struct local_socket *s)
         return rc;
     s->n += rc;
 
-    eol = memchr(s->buf, '\n', s->n);
-    if(eol == NULL)
-        return 1;
+    while(s->n > 0) {
+        eol = memchr(s->buf, '\n', s->n);
+        if(eol == NULL)
+            break;
+        n = eol + 1 - s->buf;
 
-    rc = parse_config_from_string(s->buf, eol + 1 - s->buf, &message);
-    switch(rc) {
-    case CONFIG_ACTION_DONE:
-        break;
-    case CONFIG_ACTION_QUIT:
-        shutdown(s->fd, 1);
-        reply[0] = '\0';
-        break;
-    case CONFIG_ACTION_DUMP:
-        local_notify_all_1(s);
-        break;
-    case CONFIG_ACTION_MONITOR:
-        local_notify_all_1(s);
-        s->monitor = 1;
-        break;
-    case CONFIG_ACTION_UNMONITOR:
-        s->monitor = 0;
-        break;
-    case CONFIG_ACTION_NO:
-        snprintf(reply, sizeof(reply), "no%s%s\n",
-                 message ? " " : "", message ? message : "");
-        break;
-    default:
-        snprintf(reply, sizeof(reply), "bad\n");
+        rc = parse_config_from_string(s->buf, n, &message);
+        switch(rc) {
+        case CONFIG_ACTION_DONE:
+            break;
+        case CONFIG_ACTION_QUIT:
+            shutdown(s->fd, 1);
+            reply[0] = '\0';
+            break;
+        case CONFIG_ACTION_DUMP:
+            local_notify_all_1(s);
+            break;
+        case CONFIG_ACTION_MONITOR:
+            local_notify_all_1(s);
+            s->monitor = 1;
+            break;
+        case CONFIG_ACTION_UNMONITOR:
+            s->monitor = 0;
+            break;
+        case CONFIG_ACTION_NO:
+            snprintf(reply, sizeof(reply), "no%s%s\n",
+                     message ? " " : "", message ? message : "");
+            break;
+        default:
+            snprintf(reply, sizeof(reply), "bad\n");
+        }
+
+        if(reply[0] != '\0') {
+            rc = write_timeout(s->fd, reply, strlen(reply));
+            if(rc < 0) {
+                goto fail;
+            }
+        }
+        if(s->n > n)
+            memmove(s->buf, s->buf + n, s->n - n);
+        s->n -= n;
     }
 
-    if(reply[0] != '\0') {
-        rc = write_timeout(s->fd, reply, strlen(reply));
-        if(rc < 0)
-            goto fail;
-    }
-
-    if(s->n > eol + 1 - s->buf) {
-        memmove(s->buf, eol + 1, s->n - (eol + 1 - s->buf));
-        s->n -= (eol + 1 - s->buf);
-    } else {
-        s->n = 0;
+    if(s->n == 0) {
         free(s->buf);
         s->buf = NULL;
     }

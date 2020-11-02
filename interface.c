@@ -43,6 +43,8 @@ THE SOFTWARE.
 #include "local.h"
 #include "xroute.h"
 
+#define MIN_MTU 512
+
 struct interface *interfaces = NULL;
 
 static struct interface *
@@ -68,8 +70,8 @@ add_interface(char *ifname, struct interface_conf *if_conf)
         if(strcmp(ifp->name, ifname) == 0) {
             if(if_conf)
                 fprintf(stderr,
-                        "Warning: attempting to add existing interface, "
-                        "new configuration ignored.\n");
+                        "Warning: attempting to add existing interface (%s), "
+                        "new configuration ignored.\n", ifname);
             return ifp;
         }
     }
@@ -80,8 +82,6 @@ add_interface(char *ifname, struct interface_conf *if_conf)
 
     strncpy(ifp->name, ifname, IF_NAMESIZE);
     ifp->conf = if_conf ? if_conf : default_interface_conf;
-    ifp->bucket_time = now.tv_sec;
-    ifp->bucket = BUCKET_TOKENS_MAX;
     ifp->hello_seqno = (random() & 0xFFFF);
 
     if(interfaces == NULL)
@@ -111,13 +111,11 @@ flush_interface(char *ifname)
     if(ifp == NULL)
         return 0;
 
-    interface_up(ifp, 0);
+    interface_updown(ifp, 0);
     if(prev)
         prev->next = ifp->next;
     else
         interfaces = ifp->next;
-
-    local_notify_interface(ifp, LOCAL_FLUSH);
 
     if(ifp->conf != NULL && ifp->conf != default_interface_conf)
         flush_ifconf(ifp->conf);
@@ -132,14 +130,14 @@ flush_interface(char *ifname)
 /* This should be no more than half the hello interval, so that hellos
    aren't sent late.  The result is in milliseconds. */
 unsigned
-jitter(struct interface *ifp, int urgent)
+jitter(struct buffered *buf, int urgent)
 {
-    unsigned interval = ifp->hello_interval;
+    unsigned interval = buf->flush_interval;
     if(urgent)
-        interval = MIN(interval, 100);
+        interval = MIN(interval, 20);
     else
-        interval = MIN(interval, 4000);
-    return roughly(interval) / 4;
+        interval = MIN(interval, 2000);
+    return roughly(interval / 2);
 }
 
 unsigned
@@ -275,7 +273,7 @@ check_link_local_addresses(struct interface *ifp)
 }
 
 int
-interface_up(struct interface *ifp, int up)
+interface_updown(struct interface *ifp, int up)
 {
     int mtu, rc, type;
     struct ipv6_mreq mreq;
@@ -283,12 +281,8 @@ interface_up(struct interface *ifp, int up)
     if((!!up) == if_up(ifp))
         return 0;
 
-    if(up)
-        ifp->flags |= IF_UP;
-    else
-        ifp->flags &= ~IF_UP;
-
     if(up) {
+        ifp->flags |= IF_UP;
         if(ifp->ifindex <= 0) {
             fprintf(stderr,
                     "Upping unknown interface %s.\n", ifp->name);
@@ -297,44 +291,56 @@ interface_up(struct interface *ifp, int up)
 
         rc = kernel_setup_interface(1, ifp->name, ifp->ifindex);
         if(rc < 0) {
-            fprintf(stderr, "kernel_setup_interface(%s, %d) failed.\n",
+            fprintf(stderr, "kernel_setup_interface(%s, %u) failed.\n",
                     ifp->name, ifp->ifindex);
             goto fail;
         }
 
+        memset(&ifp->buf.sin6, 0, sizeof(ifp->buf.sin6));
+        ifp->buf.sin6.sin6_family = AF_INET6;
+        memcpy(&ifp->buf.sin6.sin6_addr, protocol_group, 16);
+        ifp->buf.sin6.sin6_port = htons(protocol_port);
+        ifp->buf.sin6.sin6_scope_id = ifp->ifindex;
+
         mtu = kernel_interface_mtu(ifp->name, ifp->ifindex);
         if(mtu < 0) {
-            fprintf(stderr, "Warning: couldn't get MTU of interface %s (%d).\n",
+            fprintf(stderr,
+                    "Warning: couldn't get MTU of interface %s (%u), "
+                    "using 1280\n",
                     ifp->name, ifp->ifindex);
             mtu = 1280;
         }
 
-        /* We need to be able to fit at least two messages into a packet,
-           so MTUs below 116 require lower layer fragmentation. */
-        /* In IPv6, the minimum MTU is 1280, and every host must be able
-           to reassemble up to 1500 bytes, but I'd rather not rely on this. */
-        if(mtu < 128) {
-            fprintf(stderr, "Suspiciously low MTU %d on interface %s (%d).\n",
-                    mtu, ifp->name, ifp->ifindex);
-            mtu = 128;
+        /* We need to be able to fit at least a router-ID and an update,
+           up to 116 bytes, and that's not counting sub-TLVs or crypto keys.
+           In IPv6, the minimum MTU is 1280, and every host must be able
+           to reassemble up to 1500 bytes.  In IPv4, every host must be
+           able to reassemble up to 576 bytes.  At any rate, the Babel spec
+           says that every node must be able to parse packets of size 512. */
+        if(mtu < MIN_MTU) {
+            fprintf(stderr,
+                    "Suspiciously low MTU %d on interface %s (%u), using %d.\n",
+                    mtu, ifp->name, ifp->ifindex, MIN_MTU);
+            mtu = 512;
         }
 
-        if(ifp->sendbuf)
-            free(ifp->sendbuf);
+        if(ifp->buf.buf)
+            free(ifp->buf.buf);
 
         /* 40 for IPv6 header, 8 for UDP header, 12 for good luck. */
-        ifp->bufsize = mtu - sizeof(packet_header) - 60;
-        ifp->sendbuf = malloc(ifp->bufsize);
-        if(ifp->sendbuf == NULL) {
+        ifp->buf.size = mtu - sizeof(packet_header) - 60;
+        ifp->buf.buf = malloc(ifp->buf.size);
+        if(ifp->buf.buf == NULL) {
             fprintf(stderr, "Couldn't allocate sendbuf.\n");
-            ifp->bufsize = 0;
+            ifp->buf.size = 0;
             goto fail;
         }
+        ifp->buf.hello = -1;
 
         rc = resize_receive_buffer(mtu);
         if(rc < 0)
             fprintf(stderr, "Warning: couldn't resize "
-                    "receive buffer for interface %s (%d) (%d bytes).\n",
+                    "receive buffer for interface %s (%u) (%d bytes).\n",
                     ifp->name, ifp->ifindex, mtu);
 
         type = IF_CONF(ifp, type);
@@ -345,7 +351,7 @@ interface_up(struct interface *ifp, int up)
                 rc = kernel_interface_wireless(ifp->name, ifp->ifindex);
                 if(rc < 0) {
                     fprintf(stderr,
-                            "Warning: couldn't determine whether %s (%d) "
+                            "Warning: couldn't determine whether %s (%u) "
                             "is a wireless interface.\n",
                             ifp->name, ifp->ifindex);
                 } else if(rc) {
@@ -387,6 +393,9 @@ interface_up(struct interface *ifp, int up)
         if(IF_CONF(ifp, faraway) == CONFIG_YES)
             ifp->flags |= IF_FARAWAY;
 
+        if(IF_CONF(ifp, unicast) == CONFIG_YES)
+            ifp->flags |= IF_UNICAST;
+
         if(IF_CONF(ifp, hello_interval) > 0)
             ifp->hello_interval = IF_CONF(ifp, hello_interval);
         else if(type == IF_TYPE_WIRELESS)
@@ -398,6 +407,10 @@ interface_up(struct interface *ifp, int up)
             IF_CONF(ifp, update_interval) > 0 ?
             IF_CONF(ifp, update_interval) :
             ifp->hello_interval * 4;
+
+        /* This must be no more than half the Hello interval, or else
+           Hellos will arrive late. */
+        ifp->buf.flush_interval = ifp->hello_interval / 2;
 
         ifp->rtt_decay =
             IF_CONF(ifp, rtt_decay) > 0 ?
@@ -411,8 +424,8 @@ interface_up(struct interface *ifp, int up)
             IF_CONF(ifp, rtt_max) : 120000;
         if(ifp->rtt_max <= ifp->rtt_min) {
             fprintf(stderr,
-                    "Uh, rtt-max is less than or equal to rtt-min (%d <= %d). "
-                    "Setting it to %d.\n", ifp->rtt_max, ifp->rtt_min,
+                    "Uh, rtt-max is less than or equal to rtt-min (%u <= %u). "
+                    "Setting it to %u.\n", ifp->rtt_max, ifp->rtt_min,
                     ifp->rtt_min + 10000);
             ifp->rtt_max = ifp->rtt_min + 10000;
         }
@@ -433,6 +446,11 @@ interface_up(struct interface *ifp, int up)
                     "Warning: max_rtt_penalty is set "
                     "but timestamps are disabled on interface %s.\n",
                     ifp->name);
+
+        if(IF_CONF(ifp, rfc6126) == CONFIG_YES)
+            ifp->flags |= IF_RFC6126;
+        else
+            ifp->flags &= ~IF_RFC6126;
 
         rc = check_link_local_addresses(ifp);
         if(rc < 0) {
@@ -467,17 +485,19 @@ interface_up(struct interface *ifp, int up)
         send_hello(ifp);
         if(rc > 0)
             send_update(ifp, 0, NULL, 0, NULL, 0);
+        send_multicast_request(ifp, NULL, 0, NULL, 0);
     } else {
+        ifp->flags &= ~IF_UP;
         flush_interface_routes(ifp, 0);
-        ifp->buffered = 0;
-        ifp->bufsize = 0;
-        free(ifp->sendbuf);
+        ifp->buf.len = 0;
+        ifp->buf.size = 0;
+        free(ifp->buf.buf);
         ifp->num_buffered_updates = 0;
         ifp->update_bufsize = 0;
         if(ifp->buffered_updates)
             free(ifp->buffered_updates);
         ifp->buffered_updates = NULL;
-        ifp->sendbuf = NULL;
+        ifp->buf.buf = NULL;
         if(ifp->ifindex > 0) {
             memset(&mreq, 0, sizeof(mreq));
             memcpy(&mreq.ipv6mr_multiaddr, protocol_group, 16);
@@ -500,7 +520,7 @@ interface_up(struct interface *ifp, int up)
 
  fail:
     assert(up);
-    interface_up(ifp, 0);
+    interface_updown(ifp, 0);
     local_notify_interface(ifp, LOCAL_CHANGE);
     return -1;
 }
@@ -531,8 +551,7 @@ check_interfaces(void)
         ifindex = if_nametoindex(ifp->name);
         if(ifindex != ifp->ifindex) {
             debugf("Noticed ifindex change for %s.\n", ifp->name);
-            ifp->ifindex = 0;
-            interface_up(ifp, 0);
+            interface_updown(ifp, 0);
             ifp->ifindex = ifindex;
             ifindex_changed = 1;
         }
@@ -543,7 +562,7 @@ check_interfaces(void)
             rc = 0;
         if((rc > 0) != if_up(ifp)) {
             debugf("Noticed status change for %s.\n", ifp->name);
-            interface_up(ifp, rc > 0);
+            interface_updown(ifp, rc > 0);
         }
 
         if(if_up(ifp)) {
@@ -553,6 +572,7 @@ check_interfaces(void)
             check_interface_channel(ifp);
             rc = check_interface_ipv4(ifp);
             if(rc > 0) {
+                send_multicast_request(ifp, NULL, 0, NULL, 0);
                 send_update(ifp, 0, NULL, 0, NULL, 0);
             }
         }
